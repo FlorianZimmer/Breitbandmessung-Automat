@@ -709,7 +709,7 @@ def detect_progress_from_ui(win, day_goal: int, campaign_goal: int) -> Optional[
 # -----------------------------
 # Main
 # -----------------------------
-def main():
+def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--state-file", default=DEFAULT_STATE_FILE)
     ap.add_argument("--day-goal", type=int, default=None)
@@ -728,8 +728,12 @@ def main():
     ap.add_argument("--try-read-ui-progress", action="store_true", help="Best-effort read of 6/10 and 6/30 from UI.")
 
     # Safety / scheduling
-    ap.add_argument("--enforce-calendar-gap", action="store_true",
-                    help="Block starting a NEW measurement day if last day was yesterday (needs 1 day between).")
+    ap.add_argument(
+        "--enforce-calendar-gap",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enforce at least 1 full calendar day between measurement days (default: enabled).",
+    )
     ap.add_argument("--force", action="store_true", help="Ignore calendar-gap block.")
 
     # Control how much to run now
@@ -766,8 +770,11 @@ def main():
         default=30,
         help="Additional settle time after a measurement completes before scheduling the next one.",
     )
+    return ap
 
-    args = ap.parse_args()
+
+def main():
+    args = build_arg_parser().parse_args()
 
     if args.day_end <= args.day_start:
         raise SystemExit("--day-end must be later than --day-start (same-day window).")
