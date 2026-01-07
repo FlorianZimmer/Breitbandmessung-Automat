@@ -5,10 +5,10 @@ Automatisiert die Windows-App **Breitbandmessung** (Bundesnetzagentur) per UI-Au
 ## Download (ohne Python)
 
 Letztes Release (Windows `.exe`):  
-https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest
+[Releases (latest)](https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest)
 
 Direkt-Download der aktuellen `.exe`:  
-https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest/download/Breitbandmessung-Automat.exe
+[Breitbandmessung-Automat.exe (latest)](https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest/download/Breitbandmessung-Automat.exe)
 
 ## Voraussetzungen
 
