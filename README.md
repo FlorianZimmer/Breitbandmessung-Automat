@@ -5,10 +5,10 @@ Automatisiert die Windows-App **Breitbandmessung** (Bundesnetzagentur) per UI-Au
 ## Download (ohne Python)
 
 Letztes Release (Windows `.exe`):  
-`https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest`
+https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest
 
 Direkt-Download der aktuellen `.exe`:  
-`https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest/download/Breitbandmessung-Automat.exe`
+https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest/download/Breitbandmessung-Automat.exe
 
 ## Voraussetzungen
 
@@ -18,13 +18,31 @@ Direkt-Download der aktuellen `.exe`:
 
 Wenn du die `.exe` nutzt, brauchst du **kein Python**.
 
-## Installation
+## Installation (Python)
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
 ## Nutzung
+
+### Nutzung per `.exe` (empfohlen)
+
+1) Lade die `Breitbandmessung-Automat.exe` aus dem neuesten Release herunter.  
+2) Lege sie am besten in einen eigenen Ordner (z. B. `C:\Breitbandmessung-Automat\`).  
+3) Doppelklick startet das Programm.
+
+Optional (mit Parametern) in PowerShell im selben Ordner:
+
+```powershell
+.\Breitbandmessung-Automat.exe
+.\Breitbandmessung-Automat.exe --run-today
+.\Breitbandmessung-Automat.exe --wait-calendar-gap
+.\Breitbandmessung-Automat.exe --next-start "20:00"
+.\Breitbandmessung-Automat.exe --schedule-cron "0 7,10,20 * * *"
+```
+
+### Nutzung per Python (Dev)
 
 Startet/führt Messungen aus und verwaltet den Fortschritt in einer State-Datei:
 
