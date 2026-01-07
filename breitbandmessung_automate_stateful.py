@@ -15,7 +15,14 @@ from pywinauto.timings import wait_until_passes, TimeoutError as PywinautoTimeou
 import sys
 from pathlib import Path
 
-LOGFILE = Path(__file__).with_suffix(".log")
+def app_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+APP_DIR = app_dir()
+LOGFILE = APP_DIR / (Path(sys.argv[0]).stem + ".log" if sys.argv and sys.argv[0] else "breitbandmessung.log")
 
 def _log(msg: str):
     LOGFILE.write_text(LOGFILE.read_text(encoding="utf-8") + msg + "\n" if LOGFILE.exists() else msg + "\n", encoding="utf-8")
@@ -470,7 +477,7 @@ def connect_main_window():
 
 def dump_ui(win, tag: str) -> Optional[Path]:
     try:
-        dump_path = Path(__file__).with_name(
+        dump_path = APP_DIR / (
             f"bbm_ui_dump_{tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         )
         win.print_control_identifiers(filename=str(dump_path))
@@ -910,6 +917,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main():
     args = build_arg_parser().parse_args()
+    if getattr(sys, "frozen", False):
+        p = Path(args.state_file)
+        if not p.is_absolute():
+            args.state_file = str((APP_DIR / p).resolve())
 
     if args.day_end <= args.day_start:
         raise SystemExit("--day-end must be later than --day-start (same-day window).")

@@ -1,0 +1,42 @@
+name: Release (Windows EXE)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-build.txt
+      - name: Build exe (PyInstaller)
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --name "Breitbandmessung-Automat" --collect-submodules pywinauto --collect-submodules comtypes --collect-submodules win32com breitbandmessung_automate_stateful.py
+      - name: Compute SHA256
+        shell: pwsh
+        run: |
+          Get-FileHash -Algorithm SHA256 "dist/Breitbandmessung-Automat.exe" | Format-List
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Breitbandmessung-Automat-windows-exe
+          path: dist/Breitbandmessung-Automat.exe
+      - name: Publish GitHub Release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Breitbandmessung-Automat.exe
+

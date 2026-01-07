@@ -25,3 +25,7 @@ bbm_state.json
 *.log
 bbm_ui_dump_*.txt
 
+# PyInstaller
+build/
+dist/
+*.spec

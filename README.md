@@ -2,12 +2,21 @@
 
 Automatisiert die Windows-App **Breitbandmessung** (Bundesnetzagentur) per UI-Automation, um Messkampagnen über mehrere Tage hinweg mit den vorgegebenen Zeitabständen durchzuführen.
 
+## Download (ohne Python)
+
+Letztes Release (Windows `.exe`):  
+`https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest`
+
+Direkt-Download der aktuellen `.exe`:  
+`https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest/download/Breitbandmessung-Automat.exe`
+
 ## Voraussetzungen
 
 - Windows (UI-Automation via `pywinauto`)
-- Python 3.10+ empfohlen
 - Die Breitbandmessung-App ist installiert und kann gestartet werden
 - Der PC muss während der Messungen entsperrt bleiben (UI-Automation)
+
+Wenn du die `.exe` nutzt, brauchst du **kein Python**.
 
 ## Installation
 
@@ -47,5 +56,5 @@ python .\breitbandmessung_automate_stateful.py --schedule-cron "0 7,10,20 * * *"
 ## Dateien, die lokal entstehen
 
 - `bbm_state.json` (Fortschritt/Status)
-- `breitbandmessung_automate_stateful.log` (Log)
+- `<programmname>.log` (Log; z. B. `breitbandmessung_automate_stateful.log` oder `Breitbandmessung-Automat.log`)
 - `bbm_ui_dump_*.txt` (UI-Dumps bei Fehlern)
