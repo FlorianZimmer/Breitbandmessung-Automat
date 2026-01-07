@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import breitbandmessung_automate_stateful as bbm
 
@@ -135,6 +135,15 @@ def test_detect_progress_from_ui():
     t2 = Control(name=" 6/30 ", control_type="Text")
     win = Dialog([t1, t2])
     assert bbm.detect_progress_from_ui(win, day_goal=10, campaign_goal=30) == (6, 6)
+
+
+def test_detect_calendar_gap_wait_parses_german_message():
+    msg = (
+        "Sie können die Messung in 27:36 Stunden durchführen, da zwischen den Messtagen "
+        "ein zeitlicher Mindestabstand von einem Kalendertag eingehalten werden muss."
+    )
+    win = Dialog([Control(name=msg, control_type="Text")])
+    assert bbm.detect_calendar_gap_wait(win) == timedelta(hours=27, minutes=36)
 
 
 def test_click_by_text_clicks(monkeypatch):

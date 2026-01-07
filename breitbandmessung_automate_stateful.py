@@ -209,6 +209,51 @@ def calendar_gap_ok(state: dict) -> bool:
 # -----------------------------
 # UI Automation
 # -----------------------------
+class CalendarGapBlocked(RuntimeError):
+    def __init__(self, wait: timedelta, message: str):
+        super().__init__(message)
+        self.wait = wait
+        self.message = message
+
+
+_CALENDAR_GAP_TIME_RE = re.compile(
+    r"\bin\s+(?P<hours>\d{1,3})\s*:\s*(?P<minutes>\d{2})\s*(?:stunden|std\.?|h|hours?)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_calendar_gap_wait(win) -> Optional[timedelta]:
+    """
+    Detects the BNetzA "calendar day gap" block message in the UI and returns the remaining wait time.
+
+    Example: "Sie können die Messung in 27:36 Stunden durchführen, da zwischen den Messtagen ... Kalendertag ..."
+    """
+    try:
+        texts = []
+        for t in win.descendants(control_type="Text"):
+            try:
+                s = (t.window_text() or "").strip()
+            except Exception:
+                continue
+            if s:
+                texts.append(s)
+        if not texts:
+            return None
+    except Exception:
+        return None
+
+    joined = "\n".join(texts)
+    norm = _norm_text(joined)
+    if not any(k in norm for k in ("mindestabstand", "kalendertag", "messtagen")):
+        return None
+
+    m = _CALENDAR_GAP_TIME_RE.search(joined)
+    if not m:
+        return None
+    hours = int(m.group("hours"))
+    minutes = int(m.group("minutes"))
+    return timedelta(hours=hours, minutes=minutes)
+
 def _find_chrome_content_handle(parent_hwnd: int) -> Optional[int]:
     """
     The Breitbandmessung app UI is rendered inside a Chromium child window.
@@ -545,6 +590,13 @@ def wait_for_campaign_ready(win, timeout=1200):
             return True
         except Exception:
             pass
+
+        gap_wait = detect_calendar_gap_wait(win)
+        if gap_wait:
+            raise CalendarGapBlocked(
+                gap_wait,
+                f"Calendar-gap block detected in UI; wait remaining: {gap_wait}.",
+            )
 
         now_s = time.time()
         if now_s >= deadline:
@@ -899,6 +951,19 @@ def main():
             win = connect_main_window()
             st, et = run_single_measurement(win)
             ui_failures = 0
+        except CalendarGapBlocked as e:
+            ui_failures = 0
+            earliest = now() + e.wait + timedelta(seconds=30)
+            d = earliest.date()
+            day_start_dt, day_end_dt = _day_start_end(d)
+            if earliest > day_end_dt:
+                target = _first_start_for_day(d + timedelta(days=1))
+            else:
+                target = max(earliest, _first_start_for_day(d))
+            print(f"Calendar-gap block in UI. Waiting until {target} ...")
+            _log(f"SCHED calendar_gap_ui sleep_until={iso_dt(target)} wait={e.wait}")
+            sleep_until(target)
+            continue
         except (PywinautoTimeoutError, RuntimeError) as e:
             ui_failures += 1
             dump_path = dump_ui(win, "ui_failure") if "win" in locals() else None
