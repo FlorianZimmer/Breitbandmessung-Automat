@@ -1,6 +1,12 @@
 # Breitbandmessung-Automat
 
-Automatisiert die Windows-App **Breitbandmessung** (Bundesnetzagentur) per UI-Automation, um Messkampagnen über mehrere Tage hinweg mit den vorgegebenen Zeitabständen durchzuführen.
+[![CI](https://github.com/FlorianZimmer/Breitbandmessung-Automat/actions/workflows/ci.yml/badge.svg)](https://github.com/FlorianZimmer/Breitbandmessung-Automat/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/FlorianZimmer/Breitbandmessung-Automat?display_name=tag&sort=semver)](https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest)
+[![Download EXE](https://img.shields.io/badge/Download-EXE-blue)](https://github.com/FlorianZimmer/Breitbandmessung-Automat/releases/latest/download/Breitbandmessung-Automat.exe)
+
+Automatisiert die Windows-App **Breitbandmessung** (Bundesnetzagentur / BNetzA) per UI-Automation, um Messkampagnen über mehrere Tage hinweg mit den vorgegebenen Zeitabständen durchzuführen.
+
+Suchbegriffe: Breitbandmessung, Bundesnetzagentur, BNetzA, Messkampagne, Speedtest, Internetgeschwindigkeit, Windows Automation, pywinauto.
 
 ## Download (ohne Python)
 
