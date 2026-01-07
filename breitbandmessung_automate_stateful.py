@@ -19,9 +19,6 @@ LOGFILE = Path(__file__).with_suffix(".log")
 def _log(msg: str):
     LOGFILE.write_text(LOGFILE.read_text(encoding="utf-8") + msg + "\n" if LOGFILE.exists() else msg + "\n", encoding="utf-8")
 
-_log(f"BOOT exe={sys.executable} argv={sys.argv}")
-print("BOOT: script started, writing log to", str(LOGFILE), flush=True)
-
 
 WINDOW_TITLE_RE = r".*Breitbandmessung.*"
 
@@ -967,6 +964,8 @@ if __name__ == "__main__":
     faulthandler.enable()
 
     try:
+        _log(f"BOOT exe={sys.executable} argv={sys.argv}")
+        print("BOOT: script started, writing log to", str(LOGFILE), flush=True)
         print("Starting Breitbandmessung automation...", flush=True)
         main()
     except Exception as e:
