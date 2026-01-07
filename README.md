@@ -116,3 +116,7 @@ Tipp: Alle Optionen anzeigen: `--help`
 - `bbm_state.json` (Fortschritt/Status)
 - `<programmname>.log` (Log; z. B. `breitbandmessung_automate_stateful.log` oder `Breitbandmessung-Automat.log`)
 - `bbm_ui_dump_*.txt` (UI-Dumps bei Fehlern)
+
+<details><summary>Suchbegriffe</summary>
+Breitbandmessung, Bundesnetzagentur, BNetzA, Messkampagne, Speedtest, Internetgeschwindigkeit, Windows Automation, pywinauto
+</details>
