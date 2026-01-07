@@ -5,6 +5,7 @@ import os
 import random
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, date, time as dtime
 from typing import Optional, Tuple
 
@@ -107,6 +108,118 @@ def min_remaining_gap_total(
     return total
 
 
+@dataclass(frozen=True)
+class CronSchedule:
+    """
+    Minimal cron-like schedule supporting only minute + hour fields.
+
+    Syntax: "<minute> <hour> * * *"
+    - minute: 0-59, supports "*", "*/n", "a,b,c", "a-b", "a-b/n"
+    - hour:   0-23, same operators as minute
+    Other fields must be "*".
+    """
+
+    minutes: Tuple[int, ...]
+    hours: Tuple[int, ...]
+    raw: str
+
+    def next_on_or_after(self, dt: datetime) -> datetime:
+        base = dt.replace(second=0, microsecond=0)
+        if dt > base:
+            base += timedelta(minutes=1)
+
+        for day_offset in range(0, 370):
+            d = base.date() + timedelta(days=day_offset)
+            start_hour = base.hour if day_offset == 0 else 0
+            for h in self.hours:
+                if h < start_hour:
+                    continue
+                start_minute = base.minute if (day_offset == 0 and h == base.hour) else 0
+                m = next((m for m in self.minutes if m >= start_minute), None)
+                if m is None:
+                    continue
+                return datetime.combine(d, dtime(hour=h, minute=m))
+
+            base = datetime.combine(d + timedelta(days=1), dtime(0, 0))
+
+        raise RuntimeError("cron schedule search exceeded bounds")
+
+
+def _parse_cron_field(field: str, *, min_value: int, max_value: int) -> Tuple[int, ...]:
+    field = (field or "").strip()
+    if field == "*":
+        return tuple(range(min_value, max_value + 1))
+
+    values = set()
+    for part in field.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.startswith("*/"):
+            step = int(part[2:])
+            if step <= 0:
+                raise ValueError(f"invalid step: {part!r}")
+            values.update(range(min_value, max_value + 1, step))
+            continue
+
+        if "/" in part:
+            base, step_s = part.split("/", 1)
+            step = int(step_s)
+            if step <= 0:
+                raise ValueError(f"invalid step: {part!r}")
+        else:
+            base, step = part, None
+
+        if "-" in base:
+            a_s, b_s = base.split("-", 1)
+            a, b = int(a_s), int(b_s)
+            if a > b:
+                raise ValueError(f"invalid range: {part!r}")
+            rng = range(a, b + 1, step or 1)
+            values.update(rng)
+        else:
+            v = int(base)
+            values.add(v)
+
+    out = sorted(v for v in values if min_value <= v <= max_value)
+    if not out:
+        raise ValueError(f"no values in range {min_value}-{max_value}: {field!r}")
+    return tuple(out)
+
+
+def parse_cron_schedule(expr: str) -> CronSchedule:
+    parts = [p for p in (expr or "").strip().split() if p]
+    if len(parts) != 5:
+        raise argparse.ArgumentTypeError("Cron must have 5 fields: '<min> <hour> * * *'")
+    minute_s, hour_s, dom, mon, dow = parts
+    if dom != "*" or mon != "*" or dow != "*":
+        raise argparse.ArgumentTypeError("Only minute+hour cron is supported; use '* * *' for day/month/dow.")
+    try:
+        minutes = _parse_cron_field(minute_s, min_value=0, max_value=59)
+        hours = _parse_cron_field(hour_s, min_value=0, max_value=23)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from e
+    return CronSchedule(minutes=minutes, hours=hours, raw=expr)
+
+
+def parse_next_start(s: str) -> datetime:
+    s = (s or "").strip()
+    if not s:
+        raise argparse.ArgumentTypeError("Empty datetime")
+    if re.match(r"^\\d{1,2}:\\d{2}$", s):
+        t = parse_hhmm(s)
+        dt = day_dt(date.today(), t)
+        if dt <= now():
+            dt += timedelta(days=1)
+        return dt
+    try:
+        return datetime.fromisoformat(s)
+    except Exception as e:
+        raise argparse.ArgumentTypeError(
+            "Invalid datetime; use 'YYYY-MM-DD HH:MM[:SS]' / ISO-8601 or 'HH:MM'."
+        ) from e
+
+
 def choose_next_start_time(
     *,
     last_start: datetime,
@@ -117,6 +230,7 @@ def choose_next_start_time(
     min_gap_buffer_seconds: int,
     post_measurement_settle_seconds: int,
     rng: random.Random,
+    schedule: Optional[CronSchedule] = None,
 ) -> Optional[datetime]:
     earliest = max(
         last_start + min_gap_after_completed(completed_in_day, min_gap_buffer_seconds=min_gap_buffer_seconds),
@@ -132,6 +246,10 @@ def choose_next_start_time(
 
     if earliest > latest:
         return None
+
+    if schedule is not None:
+        cand = schedule.next_on_or_after(earliest)
+        return cand if cand <= latest else None
 
     slack_seconds = max(0.0, (latest - earliest).total_seconds())
     if slack_seconds <= 1.0:
@@ -734,6 +852,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=True,
         help="Enforce at least 1 full calendar day between measurement days (default: enabled).",
     )
+    ap.add_argument(
+        "--wait-calendar-gap",
+        action="store_true",
+        help="If calendar-gap blocks, sleep until allowed instead of stopping.",
+    )
     ap.add_argument("--force", action="store_true", help="Ignore calendar-gap block.")
 
     # Control how much to run now
@@ -752,6 +875,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Daily scheduling / spreading
     ap.add_argument("--day-start", type=parse_hhmm, default=parse_hhmm("07:00"), help="Daily window start HH:MM.")
     ap.add_argument("--day-end", type=parse_hhmm, default=parse_hhmm("23:59"), help="Daily window end HH:MM.")
+    ap.add_argument(
+        "--next-start",
+        type=parse_next_start,
+        default=None,
+        help="Override the start time of the next measurement (ISO datetime or HH:MM).",
+    )
+    ap.add_argument(
+        "--schedule-cron",
+        type=parse_cron_schedule,
+        default=None,
+        help="Cron-like schedule for measurement starts: '<min> <hour> * * *' (minute+hour only).",
+    )
     ap.add_argument(
         "--day-start-jitter-minutes",
         type=int,
@@ -778,6 +913,23 @@ def main():
 
     if args.day_end <= args.day_start:
         raise SystemExit("--day-end must be later than --day-start (same-day window).")
+
+    schedule = args.schedule_cron
+    if schedule is not None:
+        d0 = date(2000, 1, 1)
+        start_dt = day_dt(d0, args.day_start)
+        end_dt = day_dt(d0, args.day_end)
+        any_in_window = False
+        for h in schedule.hours:
+            for m in schedule.minutes:
+                t = datetime.combine(d0, dtime(hour=h, minute=m))
+                if start_dt <= t < end_dt:
+                    any_in_window = True
+                    break
+            if any_in_window:
+                break
+        if not any_in_window:
+            raise SystemExit("--schedule-cron has no times within the daily window; adjust --day-start/--day-end.")
 
     rng_seed = args.random_seed if args.random_seed is not None else int(now().timestamp())
     rng = random.Random(rng_seed)
@@ -838,6 +990,7 @@ def main():
         run_until_campaign = False
     else:
         run_until_campaign = args.run_until_campaign_done
+    next_start_override = args.next_start
 
     def _day_start_end(d: date) -> Tuple[datetime, datetime]:
         return day_dt(d, args.day_start), day_dt(d, args.day_end)
@@ -855,6 +1008,10 @@ def main():
             min_gap_buffer_seconds=args.min_gap_buffer_seconds,
         )
         latest_first = day_end_dt - min_gaps
+        if schedule is not None:
+            cand = schedule.next_on_or_after(day_start_dt)
+            return cand if cand < day_end_dt else day_start_dt
+
         jitter_cap_seconds = max(0, args.day_start_jitter_minutes) * 60
         jitter_room = max(0.0, (latest_first - day_start_dt).total_seconds())
         jitter_seconds = rng.uniform(0.0, min(jitter_cap_seconds, jitter_room)) if jitter_room > 0 else 0.0
@@ -874,10 +1031,13 @@ def main():
             last_measured = date.fromisoformat(state["measurement_days"][-1]) if state.get("measurement_days") else today
             next_day = _next_allowed_measurement_day(last_measured)
             target = _first_start_for_day(next_day)
-            print(f"Daily limit reached. Waiting until next measurement day: {target} ...")
-            _log(f"SCHED daily_limit sleep_until={iso_dt(target)}")
-            sleep_until(target)
-            continue
+            print(f"Daily limit reached. Next measurement day earliest: {target}.")
+            _log(f"SCHED daily_limit next={iso_dt(target)}")
+            if args.wait_calendar_gap:
+                print(f"Waiting until next measurement day: {target} ...")
+                sleep_until(target)
+                continue
+            return
 
         # Calendar-gap enforcement only when starting a new day (day_done == 0)
         if args.enforce_calendar_gap and not args.force and state["day_done"] == 0 and state.get("measurement_days"):
@@ -887,11 +1047,14 @@ def main():
                 target = _first_start_for_day(next_day)
                 print(
                     f"Calendar-gap rule blocks starting today (last measurement day: {last.isoformat()}). "
-                    f"Waiting until {target} ..."
+                    f"Earliest next start: {target}."
                 )
-                _log(f"SCHED calendar_gap sleep_until={iso_dt(target)} last={last.isoformat()}")
-                sleep_until(target)
-                continue
+                _log(f"SCHED calendar_gap next={iso_dt(target)} last={last.isoformat()}")
+                if args.wait_calendar_gap and run_until_campaign:
+                    print(f"Waiting until {target} ...")
+                    sleep_until(target)
+                    continue
+                return
 
         # If it's before the daily window and we haven't started today, wait until the window opens (with jitter).
         if state["day_done"] == 0 and now() < day_start_dt:
@@ -901,6 +1064,41 @@ def main():
                 _log(f"SCHED day_window_start sleep_until={iso_dt(target)}")
                 sleep_until(target)
             continue
+
+        # Optional: align to a user-provided schedule / start override before attempting the next measurement.
+        planned = None
+        planned_is_override = False
+        if next_start_override is not None:
+            planned = next_start_override
+            planned_is_override = True
+        elif schedule is not None:
+            planned = schedule.next_on_or_after(now())
+
+        if planned is not None:
+            planned = planned.replace(second=0, microsecond=0)
+            if planned > now():
+                # If this wait would cross a calendar-gap blocked period, default to stopping unless explicitly told to wait.
+                if (
+                    args.enforce_calendar_gap
+                    and not args.force
+                    and state["day_done"] == 0
+                    and state.get("measurement_days")
+                ):
+                    last = date.fromisoformat(state["measurement_days"][-1])
+                    allowed_day = last + timedelta(days=2)
+                    if planned.date() < allowed_day:
+                        planned = _first_start_for_day(allowed_day)
+                if (not planned_is_override) and (not args.wait_calendar_gap) and (planned.date() - today).days >= 2:
+                    print(f"Calendar-gap wait required. Earliest next start: {planned}. (Use --wait-calendar-gap to sleep)")
+                    _log(f"SCHED calendar_gap_stop next={iso_dt(planned)}")
+                    return
+
+                print(f"Next measurement scheduled at {planned} ...")
+                _log(f"SCHED next_override sleep_until={iso_dt(planned)}")
+                sleep_until(planned)
+                next_start_override = None
+                continue
+            next_start_override = None
 
         # If it's too late to start/continue today, warn and roll to the next day.
         if now() >= day_end_dt:
@@ -967,10 +1165,13 @@ def main():
                 target = _first_start_for_day(d + timedelta(days=1))
             else:
                 target = max(earliest, _first_start_for_day(d))
-            print(f"Calendar-gap block in UI. Waiting until {target} ...")
-            _log(f"SCHED calendar_gap_ui sleep_until={iso_dt(target)} wait={e.wait}")
-            sleep_until(target)
-            continue
+            print(f"Calendar-gap block in UI. Earliest next start: {target}.")
+            _log(f"SCHED calendar_gap_ui next={iso_dt(target)} wait={e.wait}")
+            if args.wait_calendar_gap and run_until_campaign:
+                print(f"Waiting until {target} ...")
+                sleep_until(target)
+                continue
+            return
         except (PywinautoTimeoutError, RuntimeError) as e:
             ui_failures += 1
             dump_path = dump_ui(win, "ui_failure") if "win" in locals() else None
@@ -1006,6 +1207,7 @@ def main():
             min_gap_buffer_seconds=args.min_gap_buffer_seconds,
             post_measurement_settle_seconds=args.post_measurement_settle_seconds,
             rng=rng,
+            schedule=schedule,
         )
 
         if next_start is None:
