@@ -6,7 +6,7 @@
 
 Automatisiert die Windows-App **Breitbandmessung** (Bundesnetzagentur / BNetzA) per UI-Automation, um Messkampagnen über mehrere Tage hinweg mit den vorgegebenen Zeitabständen durchzuführen.
 
-Suchbegriffe: Breitbandmessung, Bundesnetzagentur, BNetzA, Messkampagne, Speedtest, Internetgeschwindigkeit, Windows Automation, pywinauto.
+Offizielles Tool: [breitbandmessung.de](https://www.breitbandmessung.de/)
 
 ## Download (ohne Python)
 
@@ -56,26 +56,60 @@ Startet/führt Messungen aus und verwaltet den Fortschritt in einer State-Datei:
 python .\breitbandmessung_automate_stateful.py
 ```
 
-Wichtige Parameter:
+## Alle Parameter (mit Beispielen)
 
-- `--state-file` (Default: `bbm_state.json`)
-- `--day-goal` / `--campaign-goal` (z. B. `10` / `30`)
-- `--day-start` / `--day-end` (tägliches Zeitfenster)
-- `--run-today` (stoppt nach dem Tagesziel statt über mehrere Tage weiterzulaufen)
-- `--enforce-calendar-gap` / `--no-enforce-calendar-gap` (Default: aktiviert; erzwingt mindestens 1 freien Kalendertag zwischen Messtagen)
-- `--wait-calendar-gap` (wenn der Kalendertag-Abstand blockiert: nicht beenden, sondern bis zum frühesten Zeitpunkt schlafen)
-- `--next-start` (Startzeit der nächsten Messung explizit setzen, z. B. `HH:MM` oder `YYYY-MM-DD HH:MM`)
-- `--schedule-cron` (eigener Startplan im Cron-Stil: `"<min> <hour> * * *"`; nur Minute+Stunde)
+Tipp: Alle Optionen anzeigen: `--help`
 
-Beispiele:
+### Dateien / Ziele
 
-```powershell
-python .\breitbandmessung_automate_stateful.py --day-goal 10 --campaign-goal 30 --enforce-calendar-gap
-python .\breitbandmessung_automate_stateful.py --run-today
-python .\breitbandmessung_automate_stateful.py --wait-calendar-gap
-python .\breitbandmessung_automate_stateful.py --next-start "20:00"
-python .\breitbandmessung_automate_stateful.py --schedule-cron "0 7,10,20 * * *"
-```
+- `--state-file bbm_state.json` (Default: `bbm_state.json`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --state-file "C:\Breitbandmessung-Automat\bbm_state.json"`
+- `--day-goal 10` / `--campaign-goal 30` (Overrides)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --day-goal 10 --campaign-goal 30`
+
+### Resume / Seed
+
+- `--skip-initial-wait` / `--no-skip-initial-wait` (Default: `--skip-initial-wait`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --no-skip-initial-wait`
+- `--seed-day-done X` (setzt heutigen Fortschritt einmalig)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --seed-day-done 10`
+- `--seed-campaign-done Y` (setzt Kampagnen-Fortschritt einmalig)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --seed-campaign-done 10`
+- `--try-read-ui-progress` (liest best-effort `6/10` und `6/30` aus der UI)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --try-read-ui-progress`
+
+### Laufmodus / Regeln
+
+- `--run-until-campaign-done` / `--no-run-until-campaign-done` (Default: `--run-until-campaign-done`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --no-run-until-campaign-done`
+- `--run-today` (Alias für `--no-run-until-campaign-done`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --run-today`
+- `--enforce-calendar-gap` / `--no-enforce-calendar-gap` (Default: `--enforce-calendar-gap`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --no-enforce-calendar-gap`
+- `--wait-calendar-gap` (wenn Kalendertag-Abstand blockiert: schlafen statt beenden)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --wait-calendar-gap`
+- `--force` (ignoriert Calendar-Gap Block)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --force`
+
+### Zeitfenster / Scheduling
+
+- `--day-start HH:MM` / `--day-end HH:MM` (Default: `07:00` bis `23:59`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --day-start 07:00 --day-end 22:00`
+- `--day-start-jitter-minutes N` (Default: `45`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --day-start-jitter-minutes 0`
+- `--next-start "<HH:MM|YYYY-MM-DD HH:MM>"` (setzt den Start der *nächsten* Messung)
+  - Beispiele: `.\Breitbandmessung-Automat.exe --next-start "20:00"` / `.\Breitbandmessung-Automat.exe --next-start "2026-01-09 10:00"`
+- `--schedule-cron "<min> <hour> * * *"` (eigener Startplan; nur Minute+Stunde)
+  - Beispiele: `.\Breitbandmessung-Automat.exe --schedule-cron "0 7,10,20 * * *"` / `.\Breitbandmessung-Automat.exe --schedule-cron "*/15 7-22 * * *"`
+
+### Abstände / Sicherheit
+
+- `--min-gap-buffer-seconds N` (Default: `120`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --min-gap-buffer-seconds 300`
+- `--post-measurement-settle-seconds N` (Default: `30`)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --post-measurement-settle-seconds 60`
+- `--random-seed N` (reproduzierbares Scheduling)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --random-seed 12345`
 
 ## Dateien, die lokal entstehen
 
