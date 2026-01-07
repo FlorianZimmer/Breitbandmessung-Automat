@@ -44,6 +44,7 @@ Optional (mit Parametern) in PowerShell im selben Ordner:
 .\Breitbandmessung-Automat.exe
 .\Breitbandmessung-Automat.exe --run-today
 .\Breitbandmessung-Automat.exe --wait-calendar-gap
+.\Breitbandmessung-Automat.exe --run-forever --wait-calendar-gap
 .\Breitbandmessung-Automat.exe --next-start "20:00"
 .\Breitbandmessung-Automat.exe --schedule-cron "0 7,10,20 * * *"
 ```
@@ -84,6 +85,8 @@ Tipp: Alle Optionen anzeigen: `--help`
   - Beispiel: `.\Breitbandmessung-Automat.exe --no-run-until-campaign-done`
 - `--run-today` (Alias für `--no-run-until-campaign-done`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --run-today`
+- `--run-forever` (nach 30 Messungen neue Kampagne starten und endlos weiterlaufen)
+  - Beispiel: `.\Breitbandmessung-Automat.exe --run-forever --wait-calendar-gap`
 - `--enforce-calendar-gap` / `--no-enforce-calendar-gap` (Default: `--enforce-calendar-gap`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --no-enforce-calendar-gap`
 - `--wait-calendar-gap` (wenn Kalendertag-Abstand blockiert: schlafen statt beenden)

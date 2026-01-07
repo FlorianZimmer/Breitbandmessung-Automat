@@ -743,14 +743,13 @@ def ensure_on_campaign_page(win):
     except Exception:
         pass
 
-    # Try left nav
-    try:
-        click_by_text(win, NAV_CAMPAIGN, title_re=NAV_CAMPAIGN_RE, control_type="Text", timeout=5)
-    except Exception:
+    # Try navigation / "start campaign" entry points.
+    for ct in ("Button", "Text", None):
         try:
-            click_by_text(win, NAV_CAMPAIGN, title_re=NAV_CAMPAIGN_RE, timeout=5)
+            click_by_text(win, NAV_CAMPAIGN, title_re=NAV_CAMPAIGN_RE, control_type=ct, timeout=5)
+            break
         except Exception:
-            pass
+            continue
 
     time.sleep(1)
     try:
@@ -872,6 +871,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Run across days until the campaign is complete (default: enabled).",
+    )
+    ap.add_argument(
+        "--run-forever",
+        action="store_true",
+        help="After finishing a campaign, start a new one and continue forever (requires app support).",
     )
     ap.add_argument(
         "--run-today",
@@ -1000,7 +1004,7 @@ def main():
     if args.run_today:
         run_until_campaign = False
     else:
-        run_until_campaign = args.run_until_campaign_done
+        run_until_campaign = args.run_until_campaign_done or args.run_forever
     next_start_override = args.next_start
 
     def _day_start_end(d: date) -> Tuple[datetime, datetime]:
@@ -1203,6 +1207,12 @@ def main():
 
         if state["campaign_done"] >= state["campaign_goal"]:
             print("Campaign complete.")
+            if args.run_forever:
+                state["campaign_cycles_completed"] = int(state.get("campaign_cycles_completed", 0)) + 1
+                state["campaign_done"] = 0
+                save_state(args.state_file, state)
+                print(f"Starting next campaign (completed cycles: {state['campaign_cycles_completed']}).")
+                continue
             return
 
         if state["day_done"] >= state["day_goal"]:
