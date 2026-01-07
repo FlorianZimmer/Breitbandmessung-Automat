@@ -93,7 +93,7 @@ Tipp: Alle Optionen anzeigen: `--help`
 
 ### Zeitfenster / Scheduling
 
-- `--day-start HH:MM` / `--day-end HH:MM` (Default: `07:00` bis `23:59`)
+- `--day-start HH:MM` / `--day-end HH:MM` (Default: `07:00` bis `23:00`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --day-start 07:00 --day-end 22:00`
 - `--day-start-jitter-minutes N` (Default: `45`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --day-start-jitter-minutes 0`

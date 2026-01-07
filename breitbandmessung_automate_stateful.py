@@ -881,7 +881,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # Daily scheduling / spreading
     ap.add_argument("--day-start", type=parse_hhmm, default=parse_hhmm("07:00"), help="Daily window start HH:MM.")
-    ap.add_argument("--day-end", type=parse_hhmm, default=parse_hhmm("23:59"), help="Daily window end HH:MM.")
+    ap.add_argument("--day-end", type=parse_hhmm, default=parse_hhmm("23:00"), help="Daily window end HH:MM.")
     ap.add_argument(
         "--next-start",
         type=parse_next_start,
