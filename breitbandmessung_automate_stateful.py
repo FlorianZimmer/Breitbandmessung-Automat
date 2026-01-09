@@ -115,6 +115,15 @@ def min_remaining_gap_total(
     return total
 
 
+def latest_start_within_day(window_end: datetime, *, day_end_buffer_seconds: int) -> datetime:
+    """
+    Start cutoff within the daily window.
+
+    We keep a configurable buffer before window end so the final measurement can actually complete.
+    """
+    return window_end - timedelta(seconds=day_end_buffer_seconds)
+
+
 @dataclass(frozen=True)
 class CronSchedule:
     """
@@ -233,7 +242,8 @@ def choose_next_start_time(
     last_end: datetime,
     completed_in_day: int,
     day_goal: int,
-    day_end: datetime,
+    window_end: datetime,
+    day_end_buffer_seconds: int,
     min_gap_buffer_seconds: int,
     post_measurement_settle_seconds: int,
     rng: random.Random,
@@ -249,7 +259,11 @@ def choose_next_start_time(
         day_goal=day_goal,
         min_gap_buffer_seconds=min_gap_buffer_seconds,
     )
-    latest = day_end - min_future
+    # Avoid starting exactly at the cutoff by staying strictly before it (sleep jitter can otherwise push us over).
+    latest_allowed_start = latest_start_within_day(window_end, day_end_buffer_seconds=day_end_buffer_seconds) - timedelta(
+        seconds=1
+    )
+    latest = latest_allowed_start - min_future
 
     if earliest > latest:
         return None
@@ -887,6 +901,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--day-start", type=parse_hhmm, default=parse_hhmm("07:00"), help="Daily window start HH:MM.")
     ap.add_argument("--day-end", type=parse_hhmm, default=parse_hhmm("23:00"), help="Daily window end HH:MM.")
     ap.add_argument(
+        "--day-end-buffer-seconds",
+        type=int,
+        default=1800,
+        help="Keep this much time before --day-end free (prevents scheduling the last start too close to window end).",
+    )
+    ap.add_argument(
         "--next-start",
         type=parse_next_start,
         default=None,
@@ -928,23 +948,32 @@ def main():
 
     if args.day_end <= args.day_start:
         raise SystemExit("--day-end must be later than --day-start (same-day window).")
+    if args.day_end_buffer_seconds < 0:
+        raise SystemExit("--day-end-buffer-seconds must be >= 0.")
+    window_len_seconds = (day_dt(date.today(), args.day_end) - day_dt(date.today(), args.day_start)).total_seconds()
+    if args.day_end_buffer_seconds >= window_len_seconds:
+        raise SystemExit("--day-end-buffer-seconds is too large for the configured daily window.")
 
     schedule = args.schedule_cron
     if schedule is not None:
         d0 = date(2000, 1, 1)
         start_dt = day_dt(d0, args.day_start)
         end_dt = day_dt(d0, args.day_end)
+        latest_start_dt = latest_start_within_day(end_dt, day_end_buffer_seconds=args.day_end_buffer_seconds)
         any_in_window = False
         for h in schedule.hours:
             for m in schedule.minutes:
                 t = datetime.combine(d0, dtime(hour=h, minute=m))
-                if start_dt <= t < end_dt:
+                if start_dt <= t < latest_start_dt:
                     any_in_window = True
                     break
             if any_in_window:
                 break
         if not any_in_window:
-            raise SystemExit("--schedule-cron has no times within the daily window; adjust --day-start/--day-end.")
+            raise SystemExit(
+                "--schedule-cron has no times within the daily window (after applying --day-end-buffer-seconds); "
+                "adjust --schedule-cron/--day-start/--day-end/--day-end-buffer-seconds."
+            )
 
     rng_seed = args.random_seed if args.random_seed is not None else int(now().timestamp())
     rng = random.Random(rng_seed)
@@ -1010,6 +1039,10 @@ def main():
     def _day_start_end(d: date) -> Tuple[datetime, datetime]:
         return day_dt(d, args.day_start), day_dt(d, args.day_end)
 
+    def _latest_start_for_day(d: date) -> datetime:
+        _day_start_dt, _day_end_dt = _day_start_end(d)
+        return latest_start_within_day(_day_end_dt, day_end_buffer_seconds=args.day_end_buffer_seconds)
+
     def _next_allowed_measurement_day(last_measured_day: date) -> date:
         if args.enforce_calendar_gap and not args.force:
             return last_measured_day + timedelta(days=2)
@@ -1017,15 +1050,17 @@ def main():
 
     def _first_start_for_day(d: date) -> datetime:
         day_start_dt, day_end_dt = _day_start_end(d)
+        latest_start_dt = _latest_start_for_day(d)
+        latest_allowed_start_dt = latest_start_dt - timedelta(seconds=1)
         min_gaps = min_remaining_gap_total(
             next_completed_in_day=1,
             day_goal=state["day_goal"],
             min_gap_buffer_seconds=args.min_gap_buffer_seconds,
         )
-        latest_first = day_end_dt - min_gaps
+        latest_first = latest_allowed_start_dt - min_gaps
         if schedule is not None:
             cand = schedule.next_on_or_after(day_start_dt)
-            return cand if cand < day_end_dt else day_start_dt
+            return cand if cand < latest_start_dt else day_start_dt
 
         jitter_cap_seconds = max(0, args.day_start_jitter_minutes) * 60
         jitter_room = max(0.0, (latest_first - day_start_dt).total_seconds())
@@ -1037,6 +1072,7 @@ def main():
         ensure_day_rollover(state)
         today = date.fromisoformat(state["current_day"])
         day_start_dt, day_end_dt = _day_start_end(today)
+        latest_start_dt = _latest_start_for_day(today)
 
         if state["day_done"] >= state["day_goal"]:
             if not run_until_campaign:
@@ -1103,28 +1139,52 @@ def main():
                     allowed_day = last + timedelta(days=2)
                     if planned.date() < allowed_day:
                         planned = _first_start_for_day(allowed_day)
-                if (not planned_is_override) and (not args.wait_calendar_gap) and (planned.date() - today).days >= 2:
-                    print(f"Calendar-gap wait required. Earliest next start: {planned}. (Use --wait-calendar-gap to sleep)")
-                    _log(f"SCHED calendar_gap_stop next={iso_dt(planned)}")
-                    return
 
-                print(f"Next measurement scheduled at {planned} ...")
-                _log(f"SCHED next_override sleep_until={iso_dt(planned)}")
-                sleep_until(planned)
-                next_start_override = None
-                continue
+                # Don't wait past the point where finishing today's remaining measurements becomes infeasible.
+                if planned.date() == today:
+                    latest_next_start = (latest_start_dt - timedelta(seconds=1)) - min_remaining_gap_total(
+                        next_completed_in_day=state["day_done"] + 1,
+                        day_goal=state["day_goal"],
+                        min_gap_buffer_seconds=args.min_gap_buffer_seconds,
+                    )
+                    if planned > latest_next_start:
+                        msg = (
+                            f"WARNING: Planned next start {planned} is too late to finish today "
+                            f"(latest feasible next start: {latest_next_start}). Starting earlier."
+                        )
+                        print(msg)
+                        _log("SCHED " + msg)
+                        planned = None
+                        next_start_override = None
+
+                if planned is not None:
+                    if (not planned_is_override) and (not args.wait_calendar_gap) and (planned.date() - today).days >= 2:
+                        print(
+                            f"Calendar-gap wait required. Earliest next start: {planned}. "
+                            f"(Use --wait-calendar-gap to sleep)"
+                        )
+                        _log(f"SCHED calendar_gap_stop next={iso_dt(planned)}")
+                        return
+
+                    print(f"Next measurement scheduled at {planned} ...")
+                    _log(f"SCHED next_override sleep_until={iso_dt(planned)}")
+                    sleep_until(planned)
+                    next_start_override = None
+                    continue
             next_start_override = None
 
         # If it's too late to start/continue today, warn and roll to the next day.
-        if now() >= day_end_dt:
+        if now() >= latest_start_dt:
             if state["day_done"] == 0:
                 print(
-                    f"WARNING: It's past today's window end ({day_end_dt}). "
+                    f"WARNING: It's past today's start cutoff ({latest_start_dt}) "
+                    f"(window end {day_end_dt}). "
                     f"Not starting a new measurement day now."
                 )
             else:
                 print(
-                    f"WARNING: It's past today's window end ({day_end_dt}). "
+                    f"WARNING: It's past today's start cutoff ({latest_start_dt}) "
+                    f"(window end {day_end_dt}). "
                     f"Day may not be completable ({state['day_done']}/{state['day_goal']} done)."
                 )
 
@@ -1145,7 +1205,7 @@ def main():
             continue
 
         # Feasibility check: can we still finish today's remaining measurements within the window?
-        latest_next_start = day_end_dt - min_remaining_gap_total(
+        latest_next_start = (latest_start_dt - timedelta(seconds=1)) - min_remaining_gap_total(
             next_completed_in_day=state["day_done"] + 1,
             day_goal=state["day_goal"],
             min_gap_buffer_seconds=args.min_gap_buffer_seconds,
@@ -1176,7 +1236,8 @@ def main():
             earliest = now() + e.wait + timedelta(seconds=30)
             d = earliest.date()
             day_start_dt, day_end_dt = _day_start_end(d)
-            if earliest > day_end_dt:
+            latest_start_dt = _latest_start_for_day(d)
+            if earliest > latest_start_dt:
                 target = _first_start_for_day(d + timedelta(days=1))
             else:
                 target = max(earliest, _first_start_for_day(d))
@@ -1224,7 +1285,8 @@ def main():
             last_end=et,
             completed_in_day=state["day_done"],
             day_goal=state["day_goal"],
-            day_end=day_end_dt,
+            window_end=day_end_dt,
+            day_end_buffer_seconds=args.day_end_buffer_seconds,
             min_gap_buffer_seconds=args.min_gap_buffer_seconds,
             post_measurement_settle_seconds=args.post_measurement_settle_seconds,
             rng=rng,
@@ -1249,8 +1311,13 @@ def main():
             sleep_until(target)
             continue
 
-        print(f"Next measurement scheduled at {next_start} (window end {day_end_dt})")
-        _log(f"SCHED next_start={iso_dt(next_start)} window_end={iso_dt(day_end_dt)}")
+        print(
+            f"Next measurement scheduled at {next_start} "
+            f"(start cutoff {latest_start_dt}, window end {day_end_dt})"
+        )
+        _log(
+            f"SCHED next_start={iso_dt(next_start)} start_cutoff={iso_dt(latest_start_dt)} window_end={iso_dt(day_end_dt)}"
+        )
         sleep_until(next_start)
 
 

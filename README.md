@@ -98,6 +98,9 @@ Tipp: Alle Optionen anzeigen: `--help`
 
 - `--day-start HH:MM` / `--day-end HH:MM` (Default: `07:00` bis `23:00`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --day-start 07:00 --day-end 22:00`
+- `--day-end-buffer-seconds N` (Default: `1800`)
+  - Hält vor `--day-end` einen Puffer frei, damit die letzte Messung nicht "auf Kante" geplant wird.
+  - Beispiel: `.\Breitbandmessung-Automat.exe --day-end 23:59 --day-end-buffer-seconds 1800`
 - `--day-start-jitter-minutes N` (Default: `45`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --day-start-jitter-minutes 0`
 - `--next-start "<HH:MM|YYYY-MM-DD HH:MM>"` (setzt den Start der *nächsten* Messung)

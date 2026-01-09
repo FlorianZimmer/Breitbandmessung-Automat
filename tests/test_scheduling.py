@@ -48,7 +48,8 @@ def test_choose_next_start_time_none_when_infeasible():
             last_end=last_end,
             completed_in_day=5,
             day_goal=10,
-            day_end=day_end,
+            window_end=day_end,
+            day_end_buffer_seconds=0,
             min_gap_buffer_seconds=120,
             post_measurement_settle_seconds=30,
             rng=rng,
@@ -62,13 +63,15 @@ def test_choose_next_start_time_within_bounds_and_deterministic():
     last_end = datetime(2026, 1, 7, 8, 1, 0)
     day_end = datetime(2026, 1, 7, 23, 0, 0)
     rng = random.Random(123)
+    end_buffer_seconds = 1800
 
     next_start = bbm.choose_next_start_time(
         last_start=last_start,
         last_end=last_end,
         completed_in_day=1,
         day_goal=10,
-        day_end=day_end,
+        window_end=day_end,
+        day_end_buffer_seconds=end_buffer_seconds,
         min_gap_buffer_seconds=120,
         post_measurement_settle_seconds=30,
         rng=rng,
@@ -79,9 +82,35 @@ def test_choose_next_start_time_within_bounds_and_deterministic():
         last_start + bbm.min_gap_after_completed(1, min_gap_buffer_seconds=120),
         last_end + timedelta(seconds=30),
     )
+    cutoff = bbm.latest_start_within_day(day_end, day_end_buffer_seconds=end_buffer_seconds)
     min_future = bbm.min_remaining_gap_total(next_completed_in_day=2, day_goal=10, min_gap_buffer_seconds=120)
-    latest = day_end - min_future
+    latest = (cutoff - timedelta(seconds=1)) - min_future
     assert earliest <= next_start <= latest
+
+
+def test_choose_next_start_time_never_schedules_at_or_after_start_cutoff():
+    # Regression: previously, the last measurement could be scheduled exactly at window end (or even later),
+    # which then caused a whole measurement day to be skipped due to the calendar-gap rule.
+    last_start = datetime(2026, 1, 7, 23, 0, 0)
+    last_end = datetime(2026, 1, 7, 23, 1, 0)
+    window_end = datetime(2026, 1, 7, 23, 59, 0)
+    end_buffer_seconds = 1800
+    rng = random.Random(0)
+
+    next_start = bbm.choose_next_start_time(
+        last_start=last_start,
+        last_end=last_end,
+        completed_in_day=9,
+        day_goal=10,
+        window_end=window_end,
+        day_end_buffer_seconds=end_buffer_seconds,
+        min_gap_buffer_seconds=120,
+        post_measurement_settle_seconds=30,
+        rng=rng,
+    )
+    assert next_start is not None
+    cutoff = bbm.latest_start_within_day(window_end, day_end_buffer_seconds=end_buffer_seconds)
+    assert next_start < cutoff
 
 
 def test_iso_dt_parse_roundtrip():
