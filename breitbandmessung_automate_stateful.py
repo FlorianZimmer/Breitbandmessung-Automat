@@ -42,10 +42,12 @@ DISCLAIMER_LABELS = [
 BTN_DO_MEASUREMENT = "Messung durchführen"
 BTN_START_MEASUREMENT = "Messung starten"
 NAV_CAMPAIGN = "Messkampagne starten"
+TAB_MEASUREMENT = "Messung"
 
 BTN_DO_MEASUREMENT_RE = r".*Messung.*durchf.*"
 BTN_START_MEASUREMENT_RE = r".*Messung.*start.*"
 NAV_CAMPAIGN_RE = r".*Messkampagne.*start.*"
+TAB_MEASUREMENT_RE = r"^\s*Messung\s*$"
 
 DEFAULT_STATE_FILE = "bbm_state.json"
 
@@ -799,7 +801,26 @@ def wait_for_campaign_ready(win, timeout=1200):
         time.sleep(2)
 
 
+def ensure_on_measurement_tab(win) -> bool:
+    """
+    Best-effort: click the "Messung" tab in the campaign UI.
+
+    Some app versions hide the "Messung durchführen" button while on the "Ergebnisse" tab.
+    """
+    for ct in ("TabItem", "Button", "Text", None):
+        try:
+            click_by_text(win, TAB_MEASUREMENT, title_re=TAB_MEASUREMENT_RE, control_type=ct, timeout=3)
+            time.sleep(0.5)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def ensure_on_campaign_page(win):
+    # Normalize state: if the app was left on "Ergebnisse", switch back to "Messung".
+    ensure_on_measurement_tab(win)
+
     try:
         btn = win.child_window(title_re=BTN_DO_MEASUREMENT_RE, control_type="Button")
         if not btn.exists(timeout=0.5):
@@ -930,7 +951,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Seed / resume options
     ap.add_argument("--seed-day-done", type=int, default=None, help="If you already did X/10 today, set X once.")
     ap.add_argument("--seed-campaign-done", type=int, default=None, help="If you already did Y/30 overall, set Y once.")
-    ap.add_argument("--try-read-ui-progress", action="store_true", help="Best-effort read of 6/10 and 6/30 from UI.")
+    ap.add_argument(
+        "--try-read-ui-progress",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Best-effort read of 6/10 and 6/30 from UI (default: enabled).",
+    )
 
     # Safety / scheduling
     ap.add_argument(

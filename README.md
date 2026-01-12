@@ -76,8 +76,8 @@ Tipp: Alle Optionen anzeigen: `--help`
   - Beispiel: `.\Breitbandmessung-Automat.exe --seed-day-done 10`
 - `--seed-campaign-done Y` (setzt Kampagnen-Fortschritt einmalig)
   - Beispiel: `.\Breitbandmessung-Automat.exe --seed-campaign-done 10`
-- `--try-read-ui-progress` (liest best-effort `6/10` und `6/30` aus der UI)
-  - Beispiel: `.\Breitbandmessung-Automat.exe --try-read-ui-progress`
+- `--try-read-ui-progress` / `--no-try-read-ui-progress` (Default: aktiv; liest best-effort `6/10` und `6/30` aus der UI)
+  - Beispiele: `.\Breitbandmessung-Automat.exe --try-read-ui-progress` / `.\Breitbandmessung-Automat.exe --no-try-read-ui-progress`
 
 ### Laufmodus / Regeln
 

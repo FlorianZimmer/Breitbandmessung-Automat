@@ -158,6 +158,39 @@ def test_click_by_text_clicks(monkeypatch):
     assert btn.clicks == 1
 
 
+def test_ensure_on_measurement_tab_clicks_messung(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bbm.time, "sleep", lambda *_args, **_kwargs: None)
+
+    def _fake_click_by_text(_win, text=None, *, title_re=None, control_type=None, timeout=10):
+        calls.append((text, title_re, control_type, timeout))
+        return True
+
+    monkeypatch.setattr(bbm, "click_by_text", _fake_click_by_text)
+
+    assert bbm.ensure_on_measurement_tab(object()) is True
+    assert calls[0][0] == bbm.TAB_MEASUREMENT
+
+
+def test_ensure_on_campaign_page_calls_ensure_on_measurement_tab(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bbm, "ensure_on_measurement_tab", lambda _w: calls.append("tab") or True)
+
+    class Btn:
+        def exists(self, *_args, **_kwargs):
+            return True
+
+        def wait(self, *_args, **_kwargs):
+            return True
+
+    class Win:
+        def child_window(self, **_kwargs):
+            return Btn()
+
+    bbm.ensure_on_campaign_page(Win())
+    assert calls == ["tab"]
+
+
 def test_run_single_measurement_smoke(monkeypatch):
     calls = []
     monkeypatch.setattr(bbm, "ensure_on_campaign_page", lambda _w: calls.append("ensure_on_campaign_page"))
