@@ -315,9 +315,18 @@ def ensure_day_rollover(state: dict):
     today = date.today().isoformat()
     if state.get("current_day") != today:
         state["current_day"] = today
-        state["day_done"] = 0
-        state["last_start"] = None
-        state["last_end"] = None
+        day_done = int(state.get("day_done") or 0)
+        day_goal = int(state.get("day_goal") or 0)
+
+        # If we're mid "measurement day" (e.g. 9/10) and midnight passes, the app can still allow
+        # finishing the remaining measurement(s) today. Keep progress and timestamps in that case.
+        in_progress = day_goal > 0 and 0 < day_done < day_goal
+        if not in_progress:
+            state["day_done"] = 0
+            state["last_start"] = None
+            state["last_end"] = None
+            # New day => no measurements recorded for "today" yet; keep state consistent.
+            prune_today_from_measurement_days_if_no_progress(state)
 
 
 def record_measurement_day(state: dict):
@@ -328,6 +337,49 @@ def record_measurement_day(state: dict):
         state["measurement_days"] = []
     if d not in state["measurement_days"]:
         state["measurement_days"].append(d)
+
+
+def prune_today_from_measurement_days_if_no_progress(state: dict):
+    """
+    Keeps `measurement_days` consistent with `day_done`.
+
+    If `day_done == 0`, the current day must not be present as the most recent
+    measurement day, otherwise calendar-gap calculations can be off by a full
+    day (e.g. after using --seed-day-done 0).
+    """
+    if int(state.get("day_done") or 0) != 0:
+        return
+    today = state.get("current_day") or date.today().isoformat()
+    days = state.get("measurement_days")
+    if not isinstance(days, list) or not days:
+        return
+    while days and days[-1] == today:
+        days.pop()
+
+
+def sync_progress_from_ui(win, state: dict) -> bool:
+    """
+    Best-effort: update `state["day_done"]` / `state["campaign_done"]` from the app UI.
+
+    Returns True if state was changed.
+    """
+    try:
+        # The progress counters are most reliably visible on the campaign page.
+        ensure_on_campaign_page(win)
+        ui_prog = detect_progress_from_ui(win, state["day_goal"], state["campaign_goal"])
+    except Exception:
+        return False
+    if not ui_prog:
+        return False
+    ui_day_done, ui_campaign_done = ui_prog
+    changed = False
+    if state.get("day_done") != ui_day_done:
+        state["day_done"] = ui_day_done
+        changed = True
+    if state.get("campaign_done") != ui_campaign_done:
+        state["campaign_done"] = ui_campaign_done
+        changed = True
+    return changed
 
 
 def calendar_gap_ok(state: dict) -> bool:
@@ -818,18 +870,33 @@ def run_single_measurement(win) -> Tuple[datetime, datetime]:
 # -----------------------------
 def detect_progress_from_ui(win, day_goal: int, campaign_goal: int) -> Optional[Tuple[int, int]]:
     """
-    Best-effort: scan Text elements for patterns like "6/10" and "6/30".
+    Best-effort: scan UI elements for patterns like "6/10" and "6/30".
     Returns (day_done, campaign_done) if found.
     """
-    pattern = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
+    strict = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
+    loose = re.compile(r"(\d+)\s*/\s*(\d+)")
     pairs = []
-    for t in win.descendants(control_type="Text"):
-        s = (t.window_text() or "").strip()
-        m = pattern.match(s)
-        if not m:
-            continue
-        a, b = int(m.group(1)), int(m.group(2))
-        pairs.append((a, b))
+
+    def _collect(descendants):
+        for el in descendants:
+            try:
+                s = (el.window_text() or "").strip()
+            except Exception:
+                continue
+            if not s:
+                continue
+            m = strict.match(s)
+            if m:
+                pairs.append((int(m.group(1)), int(m.group(2))))
+                continue
+            m2 = loose.search(s)
+            if m2:
+                pairs.append((int(m2.group(1)), int(m2.group(2))))
+
+    # Fast path: most UIs expose these as Text elements.
+    _collect(win.descendants(control_type="Text"))
+    # Fallback: Chromium-hosted UIs sometimes expose text on other element types.
+    _collect(win.descendants())
 
     day_done = None
     campaign_done = None
@@ -994,18 +1061,25 @@ def main():
 
     # Optionally read progress from UI
     if args.try_read_ui_progress:
-        ui_prog = detect_progress_from_ui(win, state["day_goal"], state["campaign_goal"])
-        if ui_prog:
-            state["day_done"], state["campaign_done"] = ui_prog
+        sync_progress_from_ui(win, state)
 
     # Seed progress (one-time or when you know UI is correct)
     if args.seed_day_done is not None:
+        if args.seed_day_done < 0 or args.seed_day_done > state["day_goal"]:
+            raise SystemExit(f"--seed-day-done must be in [0..{state['day_goal']}].")
         state["day_done"] = args.seed_day_done
     if args.seed_campaign_done is not None:
+        if args.seed_campaign_done < 0 or args.seed_campaign_done > state["campaign_goal"]:
+            raise SystemExit(f"--seed-campaign-done must be in [0..{state['campaign_goal']}].")
         state["campaign_done"] = args.seed_campaign_done
 
     if state.get("day_done", 0) > 0:
         record_measurement_day(state)
+    else:
+        # If day_done was seeded down to 0, ensure we don't carry "today" in measurement_days.
+        prune_today_from_measurement_days_if_no_progress(state)
+        state["last_start"] = None
+        state["last_end"] = None
 
     # Initial wait if resuming and we know last_start
     last_start = parse_iso_dt(state.get("last_start"))
@@ -1084,32 +1158,51 @@ def main():
             target = _first_start_for_day(next_day)
             print(f"Daily limit reached. Next measurement day earliest: {target}.")
             _log(f"SCHED daily_limit next={iso_dt(target)}")
-            if args.wait_calendar_gap:
-                print(f"Waiting until next measurement day: {target} ...")
-                sleep_until(target)
-                continue
-            return
+            print(f"Waiting until next measurement day: {target} ...")
+            sleep_until(target)
+            continue
 
         # Calendar-gap enforcement only when starting a new day (day_done == 0)
         if args.enforce_calendar_gap and not args.force and state["day_done"] == 0 and state.get("measurement_days"):
             if not calendar_gap_ok(state):
+                # If state says "new day start", but the UI still shows e.g. 9/10, we're actually resuming
+                # an incomplete measurement day (midnight rollover). Trust the UI to avoid false blocks.
+                try:
+                    win = connect_main_window()
+                    if sync_progress_from_ui(win, state) and int(state.get("day_done") or 0) > 0:
+                        _log(
+                            f"SCHED ui_progress_resume day_done={state.get('day_done')} "
+                            f"campaign_done={state.get('campaign_done')}"
+                        )
+                        save_state(args.state_file, state)
+                        print(
+                            f"UI shows progress {state['day_done']}/{state['day_goal']} "
+                            f"today; treating this as a resume (not a new measurement day)."
+                        )
+                        continue
+                except Exception:
+                    pass
+
                 last = date.fromisoformat(state["measurement_days"][-1])
                 next_day = _next_allowed_measurement_day(last)
                 target = _first_start_for_day(next_day)
                 print(
-                    f"Calendar-gap rule blocks starting today (last measurement day: {last.isoformat()}). "
+                    f"Calendar-gap predicted from state (last measurement day: {last.isoformat()}). "
                     f"Earliest next start: {target}."
                 )
-                _log(f"SCHED calendar_gap next={iso_dt(target)} last={last.isoformat()}")
+                _log(f"SCHED calendar_gap_predicted next={iso_dt(target)} last={last.isoformat()}")
                 if args.wait_calendar_gap and run_until_campaign:
                     print(f"Waiting until {target} ...")
                     sleep_until(target)
                     continue
-                return
+                # Don't exit here: the state-based calendar-gap check is a heuristic and can be wrong
+                # if a measurement day carried across midnight. The UI-level check in run_single_measurement
+                # will still enforce the rule if the app blocks.
 
-        # If it's before the daily window and we haven't started today, wait until the window opens (with jitter).
-        if state["day_done"] == 0 and now() < day_start_dt:
-            target = _first_start_for_day(today)
+        # If it's before the daily window, wait until the window opens.
+        # (Also applies when resuming an incomplete measurement day across midnight.)
+        if now() < day_start_dt:
+            target = _first_start_for_day(today) if state["day_done"] == 0 else day_start_dt
             if now() < target:
                 print(f"Waiting for daily window start: {target} ...")
                 _log(f"SCHED day_window_start sleep_until={iso_dt(target)}")
@@ -1158,7 +1251,12 @@ def main():
                         next_start_override = None
 
                 if planned is not None:
-                    if (not planned_is_override) and (not args.wait_calendar_gap) and (planned.date() - today).days >= 2:
+                    if (
+                        (not planned_is_override)
+                        and (not args.wait_calendar_gap)
+                        and (planned.date() - today).days >= 2
+                        and (not run_until_campaign)
+                    ):
                         print(
                             f"Calendar-gap wait required. Earliest next start: {planned}. "
                             f"(Use --wait-calendar-gap to sleep)"
@@ -1243,7 +1341,7 @@ def main():
                 target = max(earliest, _first_start_for_day(d))
             print(f"Calendar-gap block in UI. Earliest next start: {target}.")
             _log(f"SCHED calendar_gap_ui next={iso_dt(target)} wait={e.wait}")
-            if args.wait_calendar_gap and run_until_campaign:
+            if run_until_campaign:
                 print(f"Waiting until {target} ...")
                 sleep_until(target)
                 continue
