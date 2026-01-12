@@ -384,6 +384,22 @@ def sync_progress_from_ui(win, state: dict) -> bool:
     return changed
 
 
+def ui_progress_sync_enabled(args: argparse.Namespace) -> bool:
+    """
+    Whether UI progress sync should be used for this run.
+
+    Manual seeding should win over UI reads, so we disable UI progress sync when
+    --seed-day-done / --seed-campaign-done are provided.
+    """
+    if not bool(getattr(args, "try_read_ui_progress", False)):
+        return False
+    if getattr(args, "seed_day_done", None) is not None:
+        return False
+    if getattr(args, "seed_campaign_done", None) is not None:
+        return False
+    return True
+
+
 def calendar_gap_ok(state: dict) -> bool:
     """
     BNetzA rule (as you described): between measurement days >= 1 calendar day.
@@ -583,6 +599,69 @@ def click_by_text(win, text=None, *, title_re=None, control_type=None, timeout=1
         raise RuntimeError(f"Control not found/clickable (text={text!r}, title_re={title_re!r})") from last_err
         return True
     return wait_until_passes(timeout, 0.5, _do)
+
+
+def click_start_measurement(win, *, timeout: int = 30) -> bool:
+    """
+    Click the "Messung starten" button once it is actually clickable.
+
+    In some app versions the button becomes visible slightly before it becomes clickable/enabled.
+    """
+
+    def _get_btn():
+        btn = win.child_window(title_re=BTN_START_MEASUREMENT_RE, control_type="Button")
+        if not btn.exists(timeout=0.5):
+            btn = win.child_window(title_re=BTN_START_MEASUREMENT_RE)
+        return btn
+
+    deadline = time.time() + timeout
+    last_err = None
+    while True:
+        if time.time() >= deadline:
+            raise PywinautoTimeoutError("'Messung starten' was not clickable in time") from last_err
+        try:
+            btn = _get_btn()
+            btn.wait("visible", timeout=2)
+
+            try:
+                btn.wait("enabled", timeout=2)
+            except Exception:
+                pass
+
+            try:
+                if hasattr(btn, "is_enabled") and (not btn.is_enabled()):
+                    time.sleep(0.25)
+                    continue
+            except Exception:
+                pass
+
+            btn.click_input()
+
+            # Ensure the click was accepted: the button should disappear or become disabled shortly after.
+            time.sleep(0.5)
+            try:
+                btn2 = _get_btn()
+                try:
+                    if hasattr(btn2, "is_visible") and (not btn2.is_visible()):
+                        return True
+                except Exception:
+                    return True
+                if not btn2.exists(timeout=0.2):
+                    return True
+                try:
+                    btn2.wait("visible", timeout=0.2)
+                except Exception:
+                    return True
+                try:
+                    if hasattr(btn2, "is_enabled") and (not btn2.is_enabled()):
+                        return True
+                except Exception:
+                    return True
+            except Exception:
+                return True
+        except Exception as e:
+            last_err = e
+        time.sleep(0.25)
 
 
 def rect_center(r):
@@ -879,7 +958,7 @@ def run_single_measurement(win) -> Tuple[datetime, datetime]:
     _log(f"UI disclaimers_checkboxes clicked={clicked} total={total}")
 
     start_time = now()
-    click_by_text(win, BTN_START_MEASUREMENT, title_re=BTN_START_MEASUREMENT_RE, control_type="Button", timeout=10)
+    click_start_measurement(win, timeout=30)
 
     wait_for_campaign_ready(win, timeout=1800)
     end_time = now()
@@ -955,7 +1034,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--try-read-ui-progress",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Best-effort read of 6/10 and 6/30 from UI (default: enabled).",
+        help="Best-effort read of 6/10 and 6/30 from UI (default: enabled; auto-disabled when seeding).",
     )
 
     # Safety / scheduling
@@ -1085,9 +1164,12 @@ def main():
     # Connect window early (needed for UI progress read)
     win = connect_main_window()
 
-    # Optionally read progress from UI
-    if args.try_read_ui_progress:
+    # Optionally read progress from UI (disabled when seeding).
+    ui_sync = ui_progress_sync_enabled(args)
+    if ui_sync:
         sync_progress_from_ui(win, state)
+    elif args.try_read_ui_progress and (args.seed_day_done is not None or args.seed_campaign_done is not None):
+        _log("UI ui_progress_sync_skipped reason=manual_seed")
 
     # Seed progress (one-time or when you know UI is correct)
     if args.seed_day_done is not None:
@@ -1195,7 +1277,7 @@ def main():
                 # an incomplete measurement day (midnight rollover). Trust the UI to avoid false blocks.
                 try:
                     win = connect_main_window()
-                    if sync_progress_from_ui(win, state) and int(state.get("day_done") or 0) > 0:
+                    if ui_sync and sync_progress_from_ui(win, state) and int(state.get("day_done") or 0) > 0:
                         _log(
                             f"SCHED ui_progress_resume day_done={state.get('day_done')} "
                             f"campaign_done={state.get('campaign_done')}"

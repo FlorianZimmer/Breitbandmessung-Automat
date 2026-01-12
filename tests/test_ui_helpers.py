@@ -24,6 +24,7 @@ class Control:
         self._toggle_state = toggle_state
         self._visible = visible
         self.clicks = 0
+        self._enabled = True
 
     def window_text(self):
         return self._name
@@ -35,6 +36,9 @@ class Control:
 
     def is_visible(self):
         return self._visible
+
+    def is_enabled(self):
+        return self._enabled
 
     def get_toggle_state(self):
         if self._toggle_state is None:
@@ -191,11 +195,55 @@ def test_ensure_on_campaign_page_calls_ensure_on_measurement_tab(monkeypatch):
     assert calls == ["tab"]
 
 
+def test_click_start_measurement_waits_until_enabled(monkeypatch):
+    class Btn:
+        def __init__(self):
+            self._enabled = False
+            self._visible = True
+            self.clicks = 0
+
+        def exists(self, *_args, **_kwargs):
+            return True
+
+        def wait(self, *_args, **_kwargs):
+            return True
+
+        def is_enabled(self):
+            return self._enabled
+
+        def is_visible(self):
+            return self._visible
+
+        def click_input(self):
+            self.clicks += 1
+            self._visible = False
+
+    btn = Btn()
+
+    sleep_calls = {"n": 0}
+
+    def _sleep(_s):
+        sleep_calls["n"] += 1
+        # After one short wait, the button becomes clickable.
+        if sleep_calls["n"] >= 1:
+            btn._enabled = True
+
+    monkeypatch.setattr(bbm.time, "sleep", _sleep)
+
+    class Win:
+        def child_window(self, **_kwargs):
+            return btn
+
+    assert bbm.click_start_measurement(Win(), timeout=2) is True
+    assert btn.clicks == 1
+
+
 def test_run_single_measurement_smoke(monkeypatch):
     calls = []
     monkeypatch.setattr(bbm, "ensure_on_campaign_page", lambda _w: calls.append("ensure_on_campaign_page"))
     monkeypatch.setattr(bbm, "wait_for_campaign_ready", lambda _w, timeout=0: calls.append(f"ready:{timeout}"))
     monkeypatch.setattr(bbm, "click_by_text", lambda *_a, **_kw: calls.append("click_by_text") or True)
+    monkeypatch.setattr(bbm, "click_start_measurement", lambda *_a, **_kw: calls.append("click_start_measurement") or True)
     monkeypatch.setattr(bbm, "_check_all_disclaimer_checkboxes", lambda _d: (6, 6))
     monkeypatch.setattr(bbm, "wait_until_passes", lambda *_a, **_kw: True)
     monkeypatch.setattr(bbm.time, "sleep", lambda *_args, **_kwargs: None)
