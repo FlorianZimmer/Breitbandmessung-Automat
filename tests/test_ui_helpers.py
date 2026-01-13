@@ -150,6 +150,17 @@ def test_detect_calendar_gap_wait_parses_german_message():
     assert bbm.detect_calendar_gap_wait(win) == timedelta(hours=27, minutes=36)
 
 
+def test_detect_campaign_complete_screen_from_text():
+    win = Dialog([Control(name="Messkampagne abgeschlossen!", control_type="Text")])
+    assert bbm.detect_campaign_complete_screen(win) is True
+
+
+def test_wait_for_campaign_ready_returns_on_campaign_complete(monkeypatch):
+    monkeypatch.setattr(bbm.time, "sleep", lambda *_args, **_kwargs: None)
+    win = Dialog([Control(name="Messkampagne abgeschlossen!", control_type="Text")])
+    assert bbm.wait_for_campaign_ready(win, timeout=1) is True
+
+
 def test_click_by_text_clicks(monkeypatch):
     monkeypatch.setattr(bbm, "wait_until_passes", lambda _t, _i, fn: fn())
     btn = Control(name="Messung durchführen", control_type="Button")
@@ -240,7 +251,7 @@ def test_click_start_measurement_waits_until_enabled(monkeypatch):
 
 def test_run_single_measurement_smoke(monkeypatch):
     calls = []
-    monkeypatch.setattr(bbm, "ensure_on_campaign_page", lambda _w: calls.append("ensure_on_campaign_page"))
+    monkeypatch.setattr(bbm, "ensure_on_campaign_page", lambda _w, **_kw: calls.append("ensure_on_campaign_page"))
     monkeypatch.setattr(bbm, "wait_for_campaign_ready", lambda _w, timeout=0: calls.append(f"ready:{timeout}"))
     monkeypatch.setattr(bbm, "click_by_text", lambda *_a, **_kw: calls.append("click_by_text") or True)
     monkeypatch.setattr(bbm, "click_start_measurement", lambda *_a, **_kw: calls.append("click_start_measurement") or True)

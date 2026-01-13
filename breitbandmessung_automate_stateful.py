@@ -43,11 +43,13 @@ BTN_DO_MEASUREMENT = "Messung durchführen"
 BTN_START_MEASUREMENT = "Messung starten"
 NAV_CAMPAIGN = "Messkampagne starten"
 TAB_MEASUREMENT = "Messung"
+BTN_NEW_CAMPAIGN = "Neue Messkampagne starten"
 
 BTN_DO_MEASUREMENT_RE = r".*Messung.*durchf.*"
 BTN_START_MEASUREMENT_RE = r".*Messung.*start.*"
 NAV_CAMPAIGN_RE = r".*Messkampagne.*start.*"
 TAB_MEASUREMENT_RE = r"^\s*Messung\s*$"
+BTN_NEW_CAMPAIGN_RE = r".*Neue.*Messkampagne.*start.*"
 
 DEFAULT_STATE_FILE = "bbm_state.json"
 
@@ -463,6 +465,45 @@ def detect_calendar_gap_wait(win) -> Optional[timedelta]:
     minutes = int(m.group("minutes"))
     return timedelta(hours=hours, minutes=minutes)
 
+
+def detect_campaign_complete_screen(win) -> bool:
+    """
+    Detects the "Messkampagne abgeschlossen!" screen in the UI.
+
+    This is important because after the last measurement, the usual "Messung durchführen"
+    button may no longer appear; instead, the app shows the completion screen with a
+    "Neue Messkampagne starten" button.
+    """
+    # Fast path: try the explicit "new campaign" button.
+    for ct in ("Button", None):
+        try:
+            kwargs = {"title_re": BTN_NEW_CAMPAIGN_RE}
+            if ct is not None:
+                kwargs["control_type"] = ct
+            if win.child_window(**kwargs).exists(timeout=0.2):
+                return True
+        except Exception:
+            pass
+
+    # Fallback: scan visible text.
+    try:
+        texts = []
+        for t in win.descendants(control_type="Text"):
+            try:
+                s = (t.window_text() or "").strip()
+            except Exception:
+                continue
+            if s:
+                texts.append(s)
+        if not texts:
+            return False
+    except Exception:
+        return False
+
+    joined = "\n".join(texts)
+    norm = _norm_text(joined)
+    return ("messkampagne" in norm) and ("abgeschlossen" in norm)
+
 def _find_chrome_content_handle(parent_hwnd: int) -> Optional[int]:
     """
     The Breitbandmessung app UI is rendered inside a Chromium child window.
@@ -863,6 +904,11 @@ def wait_for_campaign_ready(win, timeout=1200):
         except Exception:
             pass
 
+        # After the last measurement of a campaign, the app may show a completion screen
+        # instead of returning to the normal campaign page.
+        if detect_campaign_complete_screen(win):
+            return True
+
         gap_wait = detect_calendar_gap_wait(win)
         if gap_wait:
             raise CalendarGapBlocked(
@@ -896,7 +942,22 @@ def ensure_on_measurement_tab(win) -> bool:
     return False
 
 
-def ensure_on_campaign_page(win):
+def try_start_new_campaign(win) -> bool:
+    for ct in ("Button", "Text", None):
+        try:
+            click_by_text(win, BTN_NEW_CAMPAIGN, title_re=BTN_NEW_CAMPAIGN_RE, control_type=ct, timeout=10)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def ensure_on_campaign_page(win, *, allow_start_new_campaign: bool = False):
+    if allow_start_new_campaign and detect_campaign_complete_screen(win):
+        if try_start_new_campaign(win):
+            _log("UI new_campaign_started")
+            time.sleep(1)
+
     # Normalize state: if the app was left on "Ergebnisse", switch back to "Messung".
     ensure_on_measurement_tab(win)
 
@@ -929,8 +990,8 @@ def ensure_on_campaign_page(win):
         return
 
 
-def run_single_measurement(win) -> Tuple[datetime, datetime]:
-    ensure_on_campaign_page(win)
+def run_single_measurement(win, *, allow_start_new_campaign: bool = False) -> Tuple[datetime, datetime]:
+    ensure_on_campaign_page(win, allow_start_new_campaign=allow_start_new_campaign)
 
     # If the app enforces a cool-down, this button may appear later; wait a bit before failing.
     print("Waiting for 'Messung durchführen' to become available...", flush=True)
@@ -1435,7 +1496,7 @@ def main():
         # Refresh the window (script may sleep for hours/days)
         try:
             win = connect_main_window()
-            st, et = run_single_measurement(win)
+            st, et = run_single_measurement(win, allow_start_new_campaign=args.run_forever)
             ui_failures = 0
         except CalendarGapBlocked as e:
             ui_failures = 0
@@ -1475,6 +1536,13 @@ def main():
         if state["campaign_done"] >= state["campaign_goal"]:
             print("Campaign complete.")
             if args.run_forever:
+                try:
+                    if detect_campaign_complete_screen(win):
+                        print("UI shows campaign completion; starting new campaign...", flush=True)
+                    if try_start_new_campaign(win):
+                        time.sleep(1)
+                except Exception as e:
+                    _log(f"UI new_campaign_start_failed err={e!r}")
                 state["campaign_cycles_completed"] = int(state.get("campaign_cycles_completed", 0)) + 1
                 state["campaign_done"] = 0
                 save_state(args.state_file, state)

@@ -85,7 +85,7 @@ Tipp: Alle Optionen anzeigen: `--help`
   - Beispiel: `.\Breitbandmessung-Automat.exe --no-run-until-campaign-done`
 - `--run-today` (Alias für `--no-run-until-campaign-done`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --run-today`
-- `--run-forever` (nach 30 Messungen neue Kampagne starten und endlos weiterlaufen)
+- `--run-forever` (nach 30 Messungen neue Kampagne starten und endlos weiterlaufen; klickt bei Bedarf automatisch `Neue Messkampagne starten`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --run-forever --wait-calendar-gap`
 - `--enforce-calendar-gap` / `--no-enforce-calendar-gap` (Default: `--enforce-calendar-gap`)
   - Beispiel: `.\Breitbandmessung-Automat.exe --no-enforce-calendar-gap`
