@@ -316,21 +316,38 @@ def save_state(path: str, state: dict):
 
 
 def ensure_day_rollover(state: dict):
+    def _reset_today_progress():
+        state["day_done"] = 0
+        state["last_start"] = None
+        state["last_end"] = None
+        # New day => no measurements recorded for "today" yet; keep state consistent.
+        prune_today_from_measurement_days_if_no_progress(state)
+
     today = date.today().isoformat()
     if state.get("current_day") != today:
         state["current_day"] = today
-        day_done = int(state.get("day_done") or 0)
-        day_goal = int(state.get("day_goal") or 0)
+        _reset_today_progress()
+        return
 
-        # If we're mid "measurement day" (e.g. 9/10) and midnight passes, the app can still allow
-        # finishing the remaining measurement(s) today. Keep progress and timestamps in that case.
-        in_progress = day_goal > 0 and 0 < day_done < day_goal
-        if not in_progress:
-            state["day_done"] = 0
-            state["last_start"] = None
-            state["last_end"] = None
-            # New day => no measurements recorded for "today" yet; keep state consistent.
-            prune_today_from_measurement_days_if_no_progress(state)
+    # Guard against stale progress when `current_day` is already "today" but the last activity
+    # timestamps are from a previous calendar day (e.g. after a run across midnight).
+    day_done = int(state.get("day_done") or 0)
+    if day_done <= 0:
+        prune_today_from_measurement_days_if_no_progress(state)
+        return
+
+    last_activity = None
+    for k in ("last_end", "last_start"):
+        s = state.get(k)
+        if not s:
+            continue
+        try:
+            last_activity = datetime.fromisoformat(s)
+            break
+        except Exception:
+            continue
+    if last_activity is not None and last_activity.date().isoformat() != today:
+        _reset_today_progress()
 
 
 def record_measurement_day(state: dict):

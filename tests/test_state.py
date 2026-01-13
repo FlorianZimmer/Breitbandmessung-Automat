@@ -64,9 +64,9 @@ def test_ensure_day_rollover_preserves_incomplete_day_progress(monkeypatch):
     }
     bbm.ensure_day_rollover(state)
     assert state["current_day"] == "2026-01-07"
-    assert state["day_done"] == 9
-    assert state["last_start"] == "x"
-    assert state["last_end"] == "y"
+    assert state["day_done"] == 0
+    assert state["last_start"] is None
+    assert state["last_end"] is None
     assert state["measurement_days"] == ["2026-01-06"]
 
 
