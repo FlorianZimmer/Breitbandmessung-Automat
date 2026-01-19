@@ -444,6 +444,14 @@ class CalendarGapBlocked(RuntimeError):
         self.message = message
 
 
+class CampaignCompleteInUI(RuntimeError):
+    """
+    Raised when the UI indicates the campaign is complete and no further measurement can be started.
+
+    This is used to distinguish "real" UI failures from the expected end-of-campaign state.
+    """
+
+
 _CALENDAR_GAP_TIME_RE = re.compile(
     r"\bin\s+(?P<hours>\d{1,3})\s*:\s*(?P<minutes>\d{2})\s*(?:stunden|std\.?|h|hours?)\b",
     re.IGNORECASE,
@@ -491,13 +499,14 @@ def detect_campaign_complete_screen(win) -> bool:
     button may no longer appear; instead, the app shows the completion screen with a
     "Neue Messkampagne starten" button.
     """
-    # Fast path: try the explicit "new campaign" button.
-    for ct in ("Button", None):
+    # Fast path: try the explicit "new campaign" button (can be a Hyperlink in Chromium UIA trees).
+    for ct in ("Hyperlink", "Button", None):
         try:
             kwargs = {"title_re": BTN_NEW_CAMPAIGN_RE}
             if ct is not None:
                 kwargs["control_type"] = ct
-            if win.child_window(**kwargs).exists(timeout=0.2):
+            # Chromium-hosted UIA trees can be slow to query; keep this small but non-trivial.
+            if win.child_window(**kwargs).exists(timeout=1.0):
                 return True
         except Exception:
             pass
@@ -505,13 +514,23 @@ def detect_campaign_complete_screen(win) -> bool:
     # Fallback: scan visible text.
     try:
         texts = []
-        for t in win.descendants(control_type="Text"):
-            try:
-                s = (t.window_text() or "").strip()
-            except Exception:
-                continue
-            if s:
-                texts.append(s)
+        for ct in ("Text", "Document"):
+            for t in win.descendants(control_type=ct):
+                try:
+                    s = (t.window_text() or "").strip()
+                except Exception:
+                    continue
+                if s:
+                    texts.append(s)
+        if not texts:
+            # Last resort: scan everything (some Chromium builds don't expose Text/Document nodes).
+            for t in win.descendants():
+                try:
+                    s = (t.window_text() or "").strip()
+                except Exception:
+                    continue
+                if s:
+                    texts.append(s)
         if not texts:
             return False
     except Exception:
@@ -519,6 +538,8 @@ def detect_campaign_complete_screen(win) -> bool:
 
     joined = "\n".join(texts)
     norm = _norm_text(joined)
+    if _norm_text(BTN_NEW_CAMPAIGN) in norm:
+        return True
     return ("messkampagne" in norm) and ("abgeschlossen" in norm)
 
 def _find_chrome_content_handle(parent_hwnd: int) -> Optional[int]:
@@ -960,12 +981,60 @@ def ensure_on_measurement_tab(win) -> bool:
 
 
 def try_start_new_campaign(win) -> bool:
-    for ct in ("Button", "Text", None):
+    # In Chromium-hosted UIA, this is commonly exposed as a Hyperlink.
+    for ct in ("Hyperlink", "Button", "Text", None):
         try:
-            click_by_text(win, BTN_NEW_CAMPAIGN, title_re=BTN_NEW_CAMPAIGN_RE, control_type=ct, timeout=10)
+            # Prefer the exact title to avoid accidentally clicking a huge Document element
+            # that happens to contain the text (common on completion screens).
+            click_by_text(win, BTN_NEW_CAMPAIGN, control_type=ct, timeout=10)
             return True
         except Exception:
             continue
+    # As a fallback, allow regex matching, but keep it restricted to likely clickable controls.
+    for ct in ("Hyperlink", "Button"):
+        try:
+            click_by_text(win, title_re=BTN_NEW_CAMPAIGN_RE, control_type=ct, timeout=10)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def start_new_campaign_and_wait(win, *, timeout: int = 60) -> bool:
+    """
+    Best-effort: click "Neue Messkampagne starten" and wait until the UI looks like an active campaign.
+
+    Returns True if the completion screen is gone and either:
+    - the "Messung durchführen" button becomes visible, or
+    - the app shows a calendar-gap block message (campaign active but blocked).
+    """
+    if not try_start_new_campaign(win):
+        return False
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        # Wait for the completion screen to disappear.
+        if detect_campaign_complete_screen(win):
+            time.sleep(1)
+            continue
+
+        # Try to get back to the campaign page; button may still be hidden due to a cool-down.
+        ensure_on_campaign_page(win)
+
+        try:
+            btn = win.child_window(title_re=BTN_DO_MEASUREMENT_RE, control_type="Button")
+            if not btn.exists(timeout=0.2):
+                btn = win.child_window(title_re=BTN_DO_MEASUREMENT_RE)
+            if btn.exists(timeout=0.2):
+                return True
+        except Exception:
+            pass
+
+        # Even without the button, a calendar-gap block indicates the campaign is active.
+        if detect_calendar_gap_wait(win):
+            return True
+
+        time.sleep(1)
     return False
 
 
@@ -986,6 +1055,16 @@ def ensure_on_campaign_page(win, *, allow_start_new_campaign: bool = False):
         return
     except Exception:
         pass
+
+    # If the measurement button isn't visible, we might be on the campaign completion screen.
+    # Try starting a new campaign as a fallback even if completion detection is flaky.
+    if allow_start_new_campaign:
+        try:
+            if try_start_new_campaign(win):
+                _log("UI new_campaign_started")
+                time.sleep(1)
+        except Exception:
+            pass
 
     # Try navigation / "start campaign" entry points.
     for ct in ("Button", "Text", None):
@@ -1013,7 +1092,21 @@ def run_single_measurement(win, *, allow_start_new_campaign: bool = False) -> Tu
     # If the app enforces a cool-down, this button may appear later; wait a bit before failing.
     print("Waiting for 'Messung durchführen' to become available...", flush=True)
     wait_for_campaign_ready(win, timeout=900)
-    click_by_text(win, BTN_DO_MEASUREMENT, title_re=BTN_DO_MEASUREMENT_RE, control_type="Button", timeout=10)
+    try:
+        click_by_text(win, BTN_DO_MEASUREMENT, title_re=BTN_DO_MEASUREMENT_RE, control_type="Button", timeout=10)
+    except RuntimeError as e:
+        # If the UI is on the completion screen, there is no "Messung durchführen" button.
+        if detect_campaign_complete_screen(win):
+            if allow_start_new_campaign and start_new_campaign_and_wait(win, timeout=60):
+                _log("UI new_campaign_started")
+                # Try again on the freshly started campaign.
+                ensure_on_campaign_page(win, allow_start_new_campaign=False)
+                print("Waiting for 'Messung durchführen' to become available...", flush=True)
+                wait_for_campaign_ready(win, timeout=900)
+                click_by_text(win, BTN_DO_MEASUREMENT, title_re=BTN_DO_MEASUREMENT_RE, control_type="Button", timeout=10)
+            else:
+                raise CampaignCompleteInUI("Campaign is complete in UI; cannot start another measurement.") from e
+        raise
 
     def _wait_start_btn():
         btn = win.child_window(title_re=BTN_START_MEASUREMENT_RE, control_type="Button")
@@ -1080,9 +1173,9 @@ def detect_progress_from_ui(win, day_goal: int, campaign_goal: int) -> Optional[
     campaign_done = None
     for a, b in pairs:
         if b == day_goal:
-            day_done = a
+            day_done = a if day_done is None else max(day_done, a)
         if b == campaign_goal:
-            campaign_done = a
+            campaign_done = a if campaign_done is None else max(campaign_done, a)
 
     if day_done is not None and campaign_done is not None:
         return (day_done, campaign_done)
@@ -1515,6 +1608,27 @@ def main():
             win = connect_main_window()
             st, et = run_single_measurement(win, allow_start_new_campaign=args.run_forever)
             ui_failures = 0
+        except CampaignCompleteInUI as e:
+            ui_failures = 0
+            # The app indicates the campaign is complete (e.g. "Messkampagne abgeschlossen!").
+            # Bring local state in sync so we don't keep trying to start a non-existent next measurement.
+            state["campaign_done"] = state["campaign_goal"]
+            save_state(args.state_file, state)
+            print(str(e), flush=True)
+            print("Campaign complete.")
+            if args.run_forever:
+                print("Starting next campaign...", flush=True)
+                if not start_new_campaign_and_wait(win, timeout=60):
+                    msg = "WARNING: Could not start a new campaign automatically from the completion screen. Stopping."
+                    print(msg, flush=True)
+                    _log("UI new_campaign_start_failed " + msg)
+                    return
+                state["campaign_cycles_completed"] = int(state.get("campaign_cycles_completed", 0)) + 1
+                state["campaign_done"] = 0
+                save_state(args.state_file, state)
+                print(f"Starting next campaign (completed cycles: {state['campaign_cycles_completed']}).")
+                continue
+            return
         except CalendarGapBlocked as e:
             ui_failures = 0
             earliest = now() + e.wait + timedelta(seconds=30)
@@ -1553,13 +1667,18 @@ def main():
         if state["campaign_done"] >= state["campaign_goal"]:
             print("Campaign complete.")
             if args.run_forever:
+                print("Starting next campaign...", flush=True)
                 try:
-                    if detect_campaign_complete_screen(win):
-                        print("UI shows campaign completion; starting new campaign...", flush=True)
-                    if try_start_new_campaign(win):
-                        time.sleep(1)
+                    if not start_new_campaign_and_wait(win, timeout=60):
+                        msg = "WARNING: Could not start a new campaign automatically from the completion screen. Stopping."
+                        print(msg, flush=True)
+                        _log("UI new_campaign_start_failed " + msg)
+                        return
                 except Exception as e:
                     _log(f"UI new_campaign_start_failed err={e!r}")
+                    msg = "WARNING: Could not start a new campaign automatically (unexpected error). Stopping."
+                    print(msg, flush=True)
+                    return
                 state["campaign_cycles_completed"] = int(state.get("campaign_cycles_completed", 0)) + 1
                 state["campaign_done"] = 0
                 save_state(args.state_file, state)

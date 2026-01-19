@@ -35,3 +35,14 @@ def test_detect_progress_from_ui_finds_progress_in_non_text_controls():
     )
     assert bbm.detect_progress_from_ui(win, day_goal=10, campaign_goal=30) == (9, 10)
 
+
+def test_detect_progress_from_ui_prefers_maximum_when_multiple_candidates_exist():
+    # Some screens contain multiple "x/30" strings; we want the highest/most recent one.
+    win = Dialog(
+        [
+            Control(text="Heute: 9/10", control_type="Pane"),
+            Control(text="Zwischenstand: 29/30", control_type="Pane"),
+            Control(text="Final: 30/30", control_type="Pane"),
+        ]
+    )
+    assert bbm.detect_progress_from_ui(win, day_goal=10, campaign_goal=30) == (9, 30)

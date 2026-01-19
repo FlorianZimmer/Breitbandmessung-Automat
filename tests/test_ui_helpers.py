@@ -155,6 +155,18 @@ def test_detect_campaign_complete_screen_from_text():
     assert bbm.detect_campaign_complete_screen(win) is True
 
 
+def test_detect_campaign_complete_screen_from_document_text():
+    # The Chromium UIA tree often exposes the whole screen as a single Document element.
+    win = Dialog([Control(name="... Messkampagne abgeschlossen! ...", control_type="Document")])
+    assert bbm.detect_campaign_complete_screen(win) is True
+
+
+def test_detect_campaign_complete_screen_from_new_campaign_link_only():
+    # Some UI dumps show the "new campaign" control as a Hyperlink.
+    win = Dialog([Control(name="Neue Messkampagne starten", control_type="Hyperlink")])
+    assert bbm.detect_campaign_complete_screen(win) is True
+
+
 def test_wait_for_campaign_ready_returns_on_campaign_complete(monkeypatch):
     monkeypatch.setattr(bbm.time, "sleep", lambda *_args, **_kwargs: None)
     win = Dialog([Control(name="Messkampagne abgeschlossen!", control_type="Text")])
